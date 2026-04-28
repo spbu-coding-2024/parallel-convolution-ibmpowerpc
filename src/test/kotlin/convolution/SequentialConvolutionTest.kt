@@ -12,7 +12,7 @@ class SequentialConvolutionTest {
             70, 80, 90,
         )
 
-        val actual = SequentialConvolution.apply_aux(
+        val actual = SequentialConvolution.applyAux(
             width = 3,
             height = 3,
             input = input,
@@ -30,7 +30,7 @@ class SequentialConvolutionTest {
             7, 8, 9,
         )
 
-        val actual = SequentialConvolution.apply_aux(
+        val actual = SequentialConvolution.applyAux(
             width = 3,
             height = 3,
             input = input,

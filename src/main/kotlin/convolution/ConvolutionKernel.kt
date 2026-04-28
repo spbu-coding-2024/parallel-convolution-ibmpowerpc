@@ -61,5 +61,16 @@ object Kernels {
         )
     }
 
+    fun resolveMany(names: String): List<ConvolutionKernel> {
+        val resolved = names
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map(::resolve)
+
+        require(resolved.isNotEmpty()) { "At least one kernel must be specified." }
+        return resolved
+    }
+
     fun availableNames(): String = all.joinToString(", ") { it.name }
 }
