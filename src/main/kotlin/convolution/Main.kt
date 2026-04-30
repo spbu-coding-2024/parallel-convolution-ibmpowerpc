@@ -7,6 +7,7 @@ private data class CliConfig(
     val inputPath: Path,
     val outputPath: Path,
     val kernelNames: String,
+    val composeKernels: Boolean,
     val mode: ExecutionMode,
     val parallelOptions: ParallelConvolutionOptions,
 )
@@ -18,19 +19,28 @@ fun main(args: Array<String>) {
     }
 
     val exitCode = runCatching {
-        val kernels = Kernels.resolveMany(config.kernelNames)
+        val requestedKernels = Kernels.resolveMany(config.kernelNames)
+        val effectiveKernels = KernelComposition.prepare(requestedKernels, config.composeKernels)
         val source = OpenCvSupport.readGrayscale(config.inputPath)
         val result = when (config.mode) {
-            ExecutionMode.SEQUENTIAL -> applySequential(source = source, kernels = kernels)
+            ExecutionMode.SEQUENTIAL -> applySequential(source = source, kernels = effectiveKernels)
             ExecutionMode.PARALLEL -> ParallelConvolution.applyMatToMat(
                 source = source,
-                kernels = kernels,
+                kernels = effectiveKernels,
                 options = config.parallelOptions,
             )
         }
 
         OpenCvSupport.write(config.outputPath, result)
-        println("Saved '${kernels.joinToString(",") { it.name }}' result to ${config.outputPath}")
+        println("Requested kernels: ${requestedKernels.joinToString(",") { it.name }}")
+        if (config.composeKernels && requestedKernels.size > 1) {
+            val composedKernel = effectiveKernels.single()
+            println("Applied as composed kernel: ${composedKernel.name} (${composedKernel.size}x${composedKernel.size})")
+            println("Note: composed-kernel output can differ from the multi-pass pipeline because each regular pass rounds pixels and reapplies clamp borders.")
+        } else {
+            println("Applied kernels: ${effectiveKernels.joinToString(",") { it.name }}")
+        }
+        println("Saved result to ${config.outputPath}")
         println("Mode: ${config.mode.cliName}")
         if (config.mode == ExecutionMode.PARALLEL) {
             println(
@@ -77,6 +87,7 @@ private fun parseArgs(args: Array<String>): CliConfig? {
     val kernelNames = options.remove("kernels")
         ?: positional.firstOrNull()
         ?: "gaussian3"
+    val composeKernels = parseBoolean(options.remove("compose-kernels") ?: "false", "compose-kernels")
     val mode = ExecutionMode.resolve(options.remove("mode") ?: ExecutionMode.PARALLEL.cliName)
     val strategy = PartitionStrategy.resolve(options.remove("strategy") ?: PartitionStrategy.ROWS.cliName)
     val threads = options.remove("threads")?.let { parsePositiveInt(it, "threads") }
@@ -92,6 +103,7 @@ private fun parseArgs(args: Array<String>): CliConfig? {
         inputPath = Path.of(args[0]),
         outputPath = Path.of(args[1]),
         kernelNames = kernelNames,
+        composeKernels = composeKernels,
         mode = mode,
         parallelOptions = ParallelConvolutionOptions(
             strategy = strategy,
@@ -138,6 +150,14 @@ private fun parsePositiveInt(value: String, optionName: String): Int {
     return parsed
 }
 
+private fun parseBoolean(value: String, optionName: String): Boolean {
+    return when (value.lowercase()) {
+        "true" -> true
+        "false" -> false
+        else -> error("Option --$optionName must be true or false, got '$value'.")
+    }
+}
+
 private fun gridDescription(options: ParallelConvolutionOptions): String {
     val tileWidth = options.tileWidth
     val tileHeight = options.tileHeight
@@ -152,17 +172,19 @@ private fun printUsage() {
     println(
         """
         Usage:
-          ./gradlew run --args="input/source.bmp output/result.bmp [kernels] [options]"
+          ./gradlew run --args="image.bmp output/result.bmp [kernels] [options]"
 
         Examples:
-          ./gradlew run --args="input/source.bmp output/rows.bmp gaussian3 --mode=parallel --strategy=rows --threads=8"
-          ./gradlew run --args="input/source.bmp output/grid.bmp gaussian3,sharpen3 --strategy=grid --tile=64x64"
-          ./gradlew run --args="input/source.bmp output/seq.bmp gaussian3 --mode=sequential"
+          ./gradlew run --args="image.bmp output/rows.bmp gaussian3 --mode=parallel --strategy=rows --threads=8"
+          ./gradlew run --args="image.bmp output/grid.bmp gaussian3,sharpen3 --strategy=grid --tile=64x64"
+          ./gradlew run --args="image.bmp output/composed.bmp gaussian3,sharpen3 --compose-kernels=true"
+          ./gradlew run --args="image.bmp output/seq.bmp gaussian3 --mode=sequential"
 
         Available kernels:
           ${Kernels.availableNames()}
 
         Options:
+          --compose-kernels=true|false
           --mode=${ExecutionMode.availableNames()}
           --strategy=${PartitionStrategy.availableNames()}
           --threads=N

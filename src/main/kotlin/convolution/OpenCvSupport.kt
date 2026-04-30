@@ -11,6 +11,7 @@ object OpenCvSupport {
     private var loaded = false
 
     fun readGrayscale(path: Path): Mat {
+        path.parent?.let(Files::createDirectories)
         require(Files.exists(path)) { "Input file does not exist: $path" }
         ensureLoaded()
 
