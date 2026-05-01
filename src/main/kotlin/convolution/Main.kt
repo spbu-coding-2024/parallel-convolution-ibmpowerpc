@@ -1,6 +1,12 @@
+@file:OptIn(kotlinx.cli.ExperimentalCli::class)
+
 package convolution
 
 import java.nio.file.Path
+import kotlinx.cli.ArgParser
+import kotlinx.cli.ArgType
+import kotlinx.cli.default
+import kotlinx.cli.optional
 import kotlin.system.exitProcess
 
 private data class CliConfig(
@@ -13,10 +19,7 @@ private data class CliConfig(
 )
 
 fun main(args: Array<String>) {
-    val config = parseArgs(args) ?: run {
-        printUsage()
-        exitProcess(1)
-    }
+    val config = parseArgs(args)
 
     val exitCode = runCatching {
         val requestedKernels = Kernels.resolveMany(config.kernelNames)
@@ -60,53 +63,62 @@ fun main(args: Array<String>) {
     exitProcess(exitCode)
 }
 
-private fun parseArgs(args: Array<String>): CliConfig? {
-    if (args.size < 2) {
-        return null
-    }
+private fun parseArgs(args: Array<String>): CliConfig {
+    val parser = ArgParser(
+        programName = "convolution",
+        prefixStyle = ArgParser.OptionPrefixStyle.GNU,
+    )
+    val inputPathText by parser.argument(ArgType.String, fullName = "input", description = "Input grayscale image path")
+    val outputPathText by parser.argument(ArgType.String, fullName = "output", description = "Output image path")
+    val kernelNamesText by parser.argument(
+        ArgType.String,
+        fullName = "kernels",
+        description = "Comma-separated kernel list",
+    ).optional()
+    val composeKernels by parser.option(
+        type = ArgType.Boolean,
+        fullName = "compose-kernels",
+        description = "Compose several kernels into one larger matrix before execution",
+    ).default(false)
+    val modeName by parser.option(
+        type = ArgType.Choice(ExecutionMode.entries.map { it.cliName }, { it }),
+        fullName = "mode",
+        description = "Execution mode",
+    ).default(ExecutionMode.PARALLEL.cliName)
+    val strategyName by parser.option(
+        type = ArgType.Choice(PartitionStrategy.entries.map { it.cliName }, { it }),
+        fullName = "strategy",
+        description = "Parallel partition strategy",
+    ).default(PartitionStrategy.ROWS.cliName)
+    val threads by parser.option(
+        type = ArgType.Int,
+        fullName = "threads",
+        description = "Thread count",
+    ).default(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+    val gridText by parser.option(
+        type = ArgType.String,
+        fullName = "grid",
+        description = "Grid partition in ROWSxCOLUMNS form",
+    ).default("2x2")
+    val tileText by parser.option(
+        type = ArgType.String,
+        fullName = "tile",
+        description = "Tile size in WIDTHxHEIGHT form",
+    )
 
-    val positional = mutableListOf<String>()
-    val options = linkedMapOf<String, String>()
+    parser.parse(args)
 
-    for (arg in args.drop(2)) {
-        if (arg.startsWith("--")) {
-            val separatorIndex = arg.indexOf('=')
-            require(separatorIndex > 2 && separatorIndex < arg.lastIndex) {
-                "Options must use --name=value syntax, got '$arg'."
-            }
-            options[arg.substring(2, separatorIndex)] = arg.substring(separatorIndex + 1)
-        } else {
-            positional += arg
-        }
-    }
-
-    require(positional.size <= 1) {
-        "Expected at most one positional kernel list, got ${positional.size}."
-    }
-
-    val kernelNames = options.remove("kernels")
-        ?: positional.firstOrNull()
-        ?: "gaussian3"
-    val composeKernels = parseBoolean(options.remove("compose-kernels") ?: "false", "compose-kernels")
-    val mode = ExecutionMode.resolve(options.remove("mode") ?: ExecutionMode.PARALLEL.cliName)
-    val strategy = PartitionStrategy.resolve(options.remove("strategy") ?: PartitionStrategy.ROWS.cliName)
-    val threads = options.remove("threads")?.let { parsePositiveInt(it, "threads") }
-        ?: Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-    val grid = options.remove("grid")?.let { parsePair(it, "grid") } ?: Pair(2, 2)
-    val tile = options.remove("tile")?.let { parsePair(it, "tile") }
-
-    require(options.isEmpty()) {
-        "Unknown options: ${options.keys.joinToString(", ")}."
-    }
+    val grid = parsePair(gridText, "grid")
+    val tile = tileText?.let { parsePair(it, "tile") }
 
     return CliConfig(
-        inputPath = Path.of(args[0]),
-        outputPath = Path.of(args[1]),
-        kernelNames = kernelNames,
+        inputPath = Path.of(inputPathText),
+        outputPath = Path.of(outputPathText),
+        kernelNames = kernelNamesText ?: "gaussian3",
         composeKernels = composeKernels,
-        mode = mode,
+        mode = ExecutionMode.resolve(modeName),
         parallelOptions = ParallelConvolutionOptions(
-            strategy = strategy,
+            strategy = PartitionStrategy.resolve(strategyName),
             threads = threads,
             gridRows = grid.first,
             gridColumns = grid.second,
@@ -135,27 +147,11 @@ private fun parsePair(value: String, optionName: String): Pair<Int, Int> {
     require(first != null && second != null) {
         "Option --$optionName must contain integer values, got '$value'."
     }
+    require(first > 0 && second > 0) {
+        "Option --$optionName must contain positive integers, got '$value'."
+    }
 
     return Pair(first, second)
-}
-
-private fun parsePositiveInt(value: String, optionName: String): Int {
-    val parsed = value.toIntOrNull()
-    require(parsed != null) {
-        "Option --$optionName must contain an integer value, got '$value'."
-    }
-    require(parsed > 0) {
-        "Option --$optionName must be positive, got '$value'."
-    }
-    return parsed
-}
-
-private fun parseBoolean(value: String, optionName: String): Boolean {
-    return when (value.lowercase()) {
-        "true" -> true
-        "false" -> false
-        else -> error("Option --$optionName must be true or false, got '$value'.")
-    }
 }
 
 private fun gridDescription(options: ParallelConvolutionOptions): String {
@@ -166,30 +162,4 @@ private fun gridDescription(options: ParallelConvolutionOptions): String {
     } else {
         "grid: ${options.gridRows}x${options.gridColumns}"
     }
-}
-
-private fun printUsage() {
-    println(
-        """
-        Usage:
-          ./gradlew run --args="image.bmp output/result.bmp [kernels] [options]"
-
-        Examples:
-          ./gradlew run --args="image.bmp output/rows.bmp gaussian3 --mode=parallel --strategy=rows --threads=8"
-          ./gradlew run --args="image.bmp output/grid.bmp gaussian3,sharpen3 --strategy=grid --tile=64x64"
-          ./gradlew run --args="image.bmp output/composed.bmp gaussian3,sharpen3 --compose-kernels=true"
-          ./gradlew run --args="image.bmp output/seq.bmp gaussian3 --mode=sequential"
-
-        Available kernels:
-          ${Kernels.availableNames()}
-
-        Options:
-          --compose-kernels=true|false
-          --mode=${ExecutionMode.availableNames()}
-          --strategy=${PartitionStrategy.availableNames()}
-          --threads=N
-          --grid=ROWSxCOLUMNS
-          --tile=WIDTHxHEIGHT
-        """.trimIndent()
-    )
 }

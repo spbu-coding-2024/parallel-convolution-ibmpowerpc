@@ -3,6 +3,9 @@ build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
+output/*
+benchmark-results/*
+plots/*
 
 ### IntelliJ IDEA ###
 .idea/modules.xml
