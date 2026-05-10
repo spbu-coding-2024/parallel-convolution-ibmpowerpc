@@ -94,7 +94,7 @@ private fun parseArgs(args: Array<String>): CliConfig {
         type = ArgType.Int,
         fullName = "threads",
         description = "Thread count",
-    ).default(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+    ).default(Runtime.getRuntime().availableProcessors())
     val gridText by parser.option(
         type = ArgType.String,
         fullName = "grid",
