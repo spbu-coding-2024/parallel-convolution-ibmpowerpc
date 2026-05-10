@@ -94,7 +94,7 @@ private fun parseArgs(args: Array<String>): CliConfig {
         type = ArgType.Int,
         fullName = "threads",
         description = "Thread count",
-    ).default(Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+    ).default(Runtime.getRuntime().availableProcessors())
     val gridText by parser.option(
         type = ArgType.String,
         fullName = "grid",
@@ -108,8 +108,8 @@ private fun parseArgs(args: Array<String>): CliConfig {
 
     parser.parse(args)
 
-    val grid = parsePair(gridText, "grid")
-    val tile = tileText?.let { parsePair(it, "tile") }
+    val grid = parseAxB(gridText, "grid")
+    val tile = tileText?.let { parseAxB(it, "tile") }
 
     return CliConfig(
         inputPath = Path.of(inputPathText),
@@ -134,24 +134,6 @@ private fun applySequential(source: org.opencv.core.Mat, kernels: List<Convoluti
         current = SequentialConvolution.apply(current, kernel)
     }
     return GrayscaleImages.toMat(current)
-}
-
-private fun parsePair(value: String, optionName: String): Pair<Int, Int> {
-    val parts = value.lowercase().split("x")
-    require(parts.size == 2) {
-        "Option --$optionName must use AxB syntax, got '$value'."
-    }
-
-    val first = parts[0].toIntOrNull()
-    val second = parts[1].toIntOrNull()
-    require(first != null && second != null) {
-        "Option --$optionName must contain integer values, got '$value'."
-    }
-    require(first > 0 && second > 0) {
-        "Option --$optionName must contain positive integers, got '$value'."
-    }
-
-    return Pair(first, second)
 }
 
 private fun gridDescription(options: ParallelConvolutionOptions): String {

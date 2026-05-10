@@ -28,6 +28,13 @@ tasks.register<JavaExec>("benchmarkConvolution") {
     mainClass = "convolution.BenchmarkMainKt"
 }
 
+tasks.register<JavaExec>("streamConvolution") {
+    group = "application"
+    description = "Run bounded streaming convolution for a directory of images."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass = "convolution.StreamMainKt"
+}
+
 application {
     mainClass = "convolution.MainKt"
 }

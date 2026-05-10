@@ -22,7 +22,7 @@ enum class PartitionStrategy(val cliName: String) {
 
 data class ParallelConvolutionOptions(
     val strategy: PartitionStrategy = PartitionStrategy.ROWS,
-    val threads: Int = Runtime.getRuntime().availableProcessors().coerceAtLeast(1),
+    val threads: Int = Runtime.getRuntime().availableProcessors(),
     val gridRows: Int = 2,
     val gridColumns: Int = 2,
     val tileWidth: Int? = null,

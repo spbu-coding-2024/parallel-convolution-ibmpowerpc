@@ -164,7 +164,7 @@ private fun buildParallelCases(): List<ParallelConvolutionOptions> {
 }
 
 private fun defaultThreadCounts(): List<Int> {
-    val processors = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    val processors = Runtime.getRuntime().availableProcessors()
     return buildList {
         add(1)
         if (processors >= 2) add(2)
