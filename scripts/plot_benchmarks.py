@@ -10,51 +10,59 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+SINGLE_IMAGE_WORKLOAD = "single-image"
+IMAGE_BATCH_WORKLOAD = "image-batch"
+
 
 def main() -> int:
     if len(sys.argv) != 3:
-        print("Usage: python3 scripts/plot_benchmarks.py benchmark-results/results.csv plots/")
+        print("Usage: plot_benchmarks.py <benchmark.csv> <output-dir>", file=sys.stderr)
         return 1
 
-    input_csv = Path(sys.argv[1])
+    csv_path = Path(sys.argv[1])
     output_dir = Path(sys.argv[2])
-    rows = load_rows(input_csv)
-    if not rows:
-        raise SystemExit("CSV file is empty.")
-
     output_dir.mkdir(parents=True, exist_ok=True)
-    grouped_rows: dict[str, list[dict[str, object]]] = defaultdict(list)
+
+    rows = load_rows(csv_path)
+    if not rows:
+        print(f"No rows found in {csv_path}", file=sys.stderr)
+        return 1
+
+    grouped_rows = defaultdict(list)
     for row in rows:
-        grouped_rows[str(row["kernel_set"])].append(row)
+        grouped_rows[(row["kernel_set"], row["workload"])].append(row)
 
-    for kernel_set, kernel_rows in grouped_rows.items():
+    for (kernel_set, workload), kernel_rows in grouped_rows.items():
         slug = slugify(kernel_set)
+        workload_suffix = "" if workload == SINGLE_IMAGE_WORKLOAD else f"-{slugify(workload)}"
+
         plot_metric(
-            rows=kernel_rows,
-            metric_key="avg_ms",
-            y_label="Average time, ms",
-            title=f"Convolution performance ({kernel_set})",
-            output_path=output_dir / f"{slug}-avg-ms.svg",
+            kernel_rows,
+            metric="avg_ms",
+            title=plot_title(workload, "performance", kernel_set),
+            ylabel="Average time, ms",
+            output_path=output_dir / f"{slug}{workload_suffix}-avg-ms.svg",
+            workload=workload,
         )
         plot_metric(
-            rows=kernel_rows,
-            metric_key="throughput_mp_s",
-            y_label="Throughput, MP/s",
-            title=f"Convolution throughput ({kernel_set})",
-            output_path=output_dir / f"{slug}-throughput.svg",
+            kernel_rows,
+            metric="throughput_mp_s",
+            title=plot_title(workload, "throughput", kernel_set),
+            ylabel="Throughput, MP/s",
+            output_path=output_dir / f"{slug}{workload_suffix}-throughput.svg",
+            workload=workload,
         )
 
-    print(f"Saved plots to {output_dir}")
     return 0
 
 
-def load_rows(input_csv: Path) -> list[dict[str, object]]:
-    with input_csv.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        rows: list[dict[str, object]] = []
-        for row in reader:
+def load_rows(csv_path: Path) -> list[dict]:
+    rows = []
+    with csv_path.open(newline="") as file:
+        for row in csv.DictReader(file):
             rows.append(
                 {
+                    "workload": row.get("workload") or SINGLE_IMAGE_WORKLOAD,
                     "kernel_set": row["kernel_set"],
                     "mode": row["mode"],
                     "strategy": row["strategy"],
@@ -70,117 +78,106 @@ def load_rows(input_csv: Path) -> list[dict[str, object]]:
                     "throughput_mp_s": float(row["throughput_mp_s"]),
                     "throughput_ci95_low_mp_s": float(row["throughput_ci95_low_mp_s"]),
                     "throughput_ci95_high_mp_s": float(row["throughput_ci95_high_mp_s"]),
+                    "image_width": int(row.get("image_width") or 0),
+                    "image_height": int(row.get("image_height") or 0),
+                    "image_count": int(row.get("image_count") or 1),
+                    "total_pixels": int(row.get("total_pixels") or 0),
+                    "kernel_count": int(row.get("kernel_count") or 0),
                 }
             )
     return rows
 
 
-def plot_metric(
-    rows: list[dict[str, object]],
-    metric_key: str,
-    y_label: str,
-    title: str,
-    output_path: Path,
-) -> None:
+def plot_metric(rows: list[dict], metric: str, title: str, ylabel: str, output_path: Path, workload: str) -> None:
     sequential_rows = [row for row in rows if row["mode"] == "sequential"]
     parallel_rows = [row for row in rows if row["mode"] == "parallel"]
 
-    all_threads = sorted({int(row["threads"]) for row in parallel_rows})
-    if not all_threads:
-        all_threads = [1]
+    threads = sorted({row["threads"] for row in parallel_rows})
+    if not threads:
+        threads = [1]
 
-    fig, ax = plt.subplots(figsize=(12, 7), constrained_layout=True)
-    ax.set_title(title, fontsize=18, fontweight="semibold")
-    ax.set_xlabel("Threads", fontsize=12)
-    ax.set_ylabel(y_label, fontsize=12)
-    ax.grid(True, which="major", axis="both", linestyle="--", linewidth=0.7, alpha=0.35)
-    ax.set_xticks(all_threads)
+    figure, axes = plt.subplots(figsize=(10, 6))
 
     if sequential_rows:
-        baseline_row = sequential_rows[0]
-        baseline = float(baseline_row[metric_key])
-        baseline_low, baseline_high = ci_bounds(baseline_row, metric_key)
-        ax.axhline(
-            baseline,
+        baseline = sequential_rows[0]
+        baseline_value = baseline[metric]
+        ci_low, ci_high = ci_bounds(baseline, metric)
+        axes.axhline(
+            baseline_value,
             color="black",
-            linestyle=":",
-            linewidth=2.0,
-            label="sequential",
+            linestyle="--",
+            linewidth=1.5,
+            label="sequential baseline",
         )
-        ax.axhspan(
-            baseline_low,
-            baseline_high,
+        axes.fill_between(
+            threads,
+            ci_low,
+            ci_high,
             color="black",
             alpha=0.08,
         )
 
-    series_map: dict[str, list[dict[str, object]]] = defaultdict(list)
+    series = defaultdict(list)
     for row in parallel_rows:
-        series_map[series_name(row)].append(row)
+        series[series_name(row, workload)].append(row)
 
-    colors = plt.get_cmap("tab10")
-    for index, name in enumerate(sorted(series_map)):
-        values = series_map[name]
-        thread_values = np.array([int(row["threads"]) for row in values], dtype=np.int32)
-        metric_values = np.array([float(row[metric_key]) for row in values], dtype=np.float64)
-        error_values = np.array([ci_half_width(row, metric_key) for row in values], dtype=np.float64)
-        order = np.argsort(thread_values)
-        thread_values = thread_values[order]
-        metric_values = metric_values[order]
-        error_values = error_values[order]
-
-        ax.errorbar(
-            thread_values,
-            metric_values,
-            yerr=error_values,
+    for name, series_rows in sorted(series.items()):
+        series_rows = sorted(series_rows, key=lambda row: row["threads"])
+        x_values = np.array([row["threads"] for row in series_rows], dtype=float)
+        y_values = np.array([row[metric] for row in series_rows], dtype=float)
+        y_errors = np.array([ci_half_width(row, metric) for row in series_rows], dtype=float)
+        axes.errorbar(
+            x_values,
+            y_values,
+            yerr=y_errors,
             marker="o",
-            linewidth=2.2,
-            markersize=6.0,
+            capsize=4,
+            linewidth=1.6,
             label=name,
-            color=colors(index % 10),
-            capsize=4.0,
         )
 
-    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False)
-    fig.savefig(output_path, format="svg")
-    plt.close(fig)
+    axes.set_title(title)
+    axes.set_xlabel("Image workers" if workload == IMAGE_BATCH_WORKLOAD else "Threads")
+    axes.set_ylabel(ylabel)
+    axes.set_xticks(threads)
+    axes.grid(True, linestyle=":", alpha=0.55)
+    axes.legend(fontsize="small", ncol=2)
+    figure.tight_layout()
+    figure.savefig(output_path)
+    plt.close(figure)
 
 
-def series_name(row: dict[str, object]) -> str:
-    partition_kind = str(row["partition_kind"])
-    partition_value = str(row["partition_value"])
-    if partition_kind == "tile":
-        return f"tile {partition_value}"
-    if partition_kind == "grid":
-        return f"grid {partition_value}"
-    return str(row["strategy"])
+def plot_title(workload: str, metric_name: str, kernel_set: str) -> str:
+    if workload == IMAGE_BATCH_WORKLOAD:
+        return f"Image batch convolution {metric_name} ({kernel_set})"
+    return f"Convolution {metric_name} ({kernel_set})"
 
 
-def ci_half_width(row: dict[str, object], metric_key: str) -> float:
-    low, high = ci_bounds(row, metric_key)
-    return max(0.0, (high - low) / 2.0)
+def series_name(row: dict, workload: str) -> str:
+    if workload == IMAGE_BATCH_WORKLOAD and row["strategy"] == "images":
+        return "parallel images"
+    if row["partition_kind"] == "tile":
+        return f"{row['strategy']} tile {row['partition_value']}"
+    if row["partition_kind"] == "grid":
+        return f"{row['strategy']} grid {row['partition_value']}"
+    return row["strategy"]
 
 
-def ci_bounds(row: dict[str, object], metric_key: str) -> tuple[float, float]:
-    if metric_key == "avg_ms":
-        return float(row["ci95_low_ms"]), float(row["ci95_high_ms"])
-    if metric_key == "throughput_mp_s":
-        return (
-            float(row["throughput_ci95_low_mp_s"]),
-            float(row["throughput_ci95_high_mp_s"]),
-        )
-    raise ValueError(f"Unsupported metric key: {metric_key}")
+def ci_half_width(row: dict, metric: str) -> float:
+    low, high = ci_bounds(row, metric)
+    return max((high - low) / 2.0, 0.0)
+
+
+def ci_bounds(row: dict, metric: str) -> tuple[float, float]:
+    if metric == "avg_ms":
+        return row["ci95_low_ms"], row["ci95_high_ms"]
+    if metric == "throughput_mp_s":
+        return row["throughput_ci95_low_mp_s"], row["throughput_ci95_high_mp_s"]
+    raise ValueError(f"Unsupported metric: {metric}")
 
 
 def slugify(value: str) -> str:
-    allowed: list[str] = []
-    for char in value.lower():
-        if char.isalnum():
-            allowed.append(char)
-        elif char in {",", ";", "+", " "}:
-            allowed.append("-")
-    slug = "".join(allowed).strip("-")
-    return slug or "benchmark"
+    return "".join(character if character.isalnum() else "-" for character in value.lower()).strip("-")
 
 
 if __name__ == "__main__":
